@@ -1,0 +1,9 @@
+name: webfinger
+description: A library that implements the WebFinger protocol defined by RFC 7033.
+version: 0.0.0-placeholder
+author: Steven Roose <stevenroose@gmail.com>
+homepage: http://stevenroose.be
+dependencies:
+  http: any
+dev_dependencies:
+  unittest: any
