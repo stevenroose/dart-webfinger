@@ -3,13 +3,15 @@
 
 library webfinger;
 
+
 import "dart:async";
 import "dart:convert";
 
+import "package:collection/equality.dart";
 import "package:http/http.dart";
 
 
-abstract class WebFinger {
+class WebFinger {
 
   static const String _WEBFINGER_PATH = "/.well-known/webfinger";
   static const String _JRD_MIME = "application/jrd+json";
@@ -21,11 +23,8 @@ abstract class WebFinger {
 
 
   final Client _client;
-  final JsonDecoder _jsonDecoder;
 
-  const WebFinger(Client client) :
-      _client = client,
-      _jsonDecoder = const JsonDecoder();
+  const WebFinger(Client client) : _client = client;
 
   /**
    * Perform a WebFinger query for the given [resource].
@@ -38,38 +37,55 @@ abstract class WebFinger {
     Uri resourceUri = resource is Uri ? resource : Uri.parse(resource);
     // manually building a URI with multiple rel keys in the query (dart:core.Uri does not support that)
     String queryBit = "resource=$resourceUri";
-    queryBit += rel == null ? "" : "&" + rel.map((r) => "rel=${Uri.encodeQueryComponent(r)}").join("&");
-    Uri query = new Uri(scheme: "https",
-                        host: resourceUri.host,
+    queryBit += rel == null ? "" : ("&" + rel.map((r) => "rel=${Uri.encodeQueryComponent(r)}").join("&"));
+    Uri query = new Uri(scheme: "https", // "A client MUST query the WebFinger resource using HTTPS only.", RFC 7033
+                        host: _getHost(resourceUri),
                         path: _WEBFINGER_PATH,
                         query: queryBit);
     return _client.get(query, headers: {
       _HTTP_HEADER_ACCEPT: _JRD_MIME
     }).then((Response response) {
       if(response.statusCode == _HTTP_STATUS_OK) {
-        return new JRDDocument.fromJSON(_jsonDecoder.convert(response.body));
+        return new JRDDocument.fromJSON(const JsonDecoder().convert(response.body));
       } else {
         throw new StateError("HTTP error ${response.statusCode}: ${response.body}");
       }
     });
   }
 
+  String _getHost(Uri uri) {
+    if(uri.host != null && uri.host != "")
+      return uri.host;
+    // now we have an URI of the form "scheme:user@host"
+    return uri.path.split("@")[1];
+  }
+
   /**
    * Shortcut method for querying accounts of the "name@host" format.
    */
-  Future<JRDDocument> account(String account, {List<String> rel}) =>
-      query("acct:$account", rel: rel);
+  Future<JRDDocument> account(String account, {List<String> rel}) {
+    Uri address = Uri.parse(account);
+    if(address.authority == "") {
+      if(address.scheme == "") {
+        return query(address.replace(scheme: "acct"), rel: rel);
+      } else {
+        return query(address, rel: rel);
+      }
+    }
+    throw new ArgumentError("Please provide a valid account identifier.");
+  }
 
 }
 
 class JRDDocument {
   final String subject;
   final String expires;
-  final List<String> aliases;
+  final Iterable<String> aliases;
   final Map<String, String> properties;
-  final List<JRDLink> links;
+  final Iterable<JRDLink> links;
 
-  const JRDDocument({this.subject, this.expires, this.aliases, this.properties, this.links});
+  JRDDocument({String this.subject, String this.expires, Iterable<String> this.aliases, Map<String, String> this.properties, Iterable<JRDLink> links})
+      : this.links = links != null ? links : new List<JRDLink>();
 
   /**
    * Find the preferred link with the given relation.
@@ -77,7 +93,7 @@ class JRDDocument {
    * The WebFinger protocol defines that if multiple links are provided with the same "rel", the first one
    * is the one preferred by the user.
    */
-  JRDLink findLink(String rel) => links != null ? links.firstWhere((l) => l.rel == rel) : null;
+  JRDLink link(String rel) => links.firstWhere((l) => l.rel == rel);
 
   /**
    * Decode from the JSON format described in [RFC 6415](https://tools.ietf.org/html/rfc6415).
@@ -107,6 +123,18 @@ class JRDDocument {
     return json;
   }
 
+  @override
+  String toString() => toJSON().toString();
+
+  @override
+  bool operator ==(other) => other is JRDDocument && const DeepCollectionEquality().equals(
+      [subject, expires, aliases, properties, links],
+      [other.subject, other.expires, other.aliases, other.properties, other.links]);
+
+  @override
+  int get hashCode => const DeepCollectionEquality().hash(
+      [subject, expires, aliases, properties, links]);
+
 }
 
 class JRDLink {
@@ -116,12 +144,16 @@ class JRDLink {
   final Map<String, String> titles;
   final Map<String, String> properties;
 
-  const JRDLink({this.rel, this.type, this.href, this.titles, this.properties});
+  JRDLink({String this.rel, String this.type, String this.href, Map<String, String> this.titles, Map<String, String> this.properties}) {
+    if(rel == null) {
+      throw new ArgumentError("The rel parameter is required.");
+    }
+  }
 
   factory JRDLink.fromJSON(Map json) =>
       new JRDLink(rel: json["rel"],
                   type: json["type"],
-                  href: json["type"],
+                  href: json["href"],
                   titles: json["titles"],
                   properties: json["properties"]);
 
@@ -139,4 +171,16 @@ class JRDLink {
       json["properties"] = properties;
     return json;
   }
+
+  @override
+  String toString() => toJSON().toString();
+
+  @override
+  bool operator ==(other) => other is JRDLink && const DeepCollectionEquality().equals(
+      [rel, type, href, titles, properties],
+      [other.rel, other.type, other.titles, other.properties]);
+
+  @override
+  int get hashCode => const DeepCollectionEquality().hash(
+      [rel, type, href, titles, properties]);
 }
